@@ -38,6 +38,7 @@ export function useRoot() {
     queryKey: queryKeys.root,
     queryFn: getRoot,
     staleTime: 5 * 60 * 1000, // 5 minutes
+    retry: 2,
   });
 }
 
@@ -46,6 +47,7 @@ export function useHealth() {
     queryKey: queryKeys.health,
     queryFn: getHealth,
     staleTime: 30 * 1000, // 30 seconds
+    retry: 2,
   });
 }
 
@@ -55,6 +57,7 @@ export function useCampaign(jobId: string, enabled = true) {
     queryKey: queryKeys.campaign(jobId),
     queryFn: () => getCampaign(jobId),
     enabled: enabled && !!jobId,
+    retry: 2,
     refetchInterval: (query) => {
       const data = query.state.data;
       if (!data) return false;
@@ -88,6 +91,7 @@ export function useCampaigns(skip = 0, limit = 20) {
     queryKey: queryKeys.campaignsList(skip, limit),
     queryFn: () => getCampaigns(skip, limit),
     staleTime: 30 * 1000, // 30 seconds
+    retry: 2,
   });
 }
 
@@ -189,26 +193,29 @@ export function useCampaignsList(page = 1, pageSize = 20) {
 
 // Hook for dashboard metrics
 export function useDashboardMetrics() {
-  const { data: campaigns, isLoading } = useCampaigns(0, 100);
+  const { data: campaigns, isLoading, isError, error } = useCampaigns(0, 100);
+
+  // Calculate metrics from actual data or return zeros on error
+  const jobs = campaigns?.jobs ?? [];
 
   const metrics = {
-    totalCampaigns: campaigns?.total || 0,
-    activeCampaigns: campaigns?.jobs?.filter(
+    totalCampaigns: campaigns?.total ?? 0,
+    activeCampaigns: jobs.filter(
       (job) =>
         job.state === 'delivering' ||
         job.state === 'pending_review' ||
         job.state === 'generating_content'
-    ).length || 0,
-    completedCampaigns: campaigns?.jobs?.filter((job) => job.state === 'completed').length || 0,
-    failedCampaigns: campaigns?.jobs?.filter((job) => job.state === 'failed').length || 0,
-    totalDelivered: campaigns?.jobs?.reduce(
-      (sum, job) => sum + job.delivery_status.filter((d) => d.status === 'delivered').length,
+    ).length,
+    completedCampaigns: jobs.filter((job) => job.state === 'completed').length,
+    failedCampaigns: jobs.filter((job) => job.state === 'failed').length,
+    totalDelivered: jobs.reduce(
+      (sum, job) => sum + (job.delivery_status?.filter((d: { status: string }) => d.status === 'delivered').length ?? 0),
       0
-    ) || 0,
-    totalRecipients: campaigns?.jobs?.reduce(
-      (sum, job) => sum + job.delivery_status.length,
+    ),
+    totalRecipients: jobs.reduce(
+      (sum, job) => sum + (job.delivery_status?.length ?? 0),
       0
-    ) || 0,
+    ),
   };
 
   const successRate =
@@ -218,6 +225,8 @@ export function useDashboardMetrics() {
 
   return {
     isLoading,
+    isError,
+    error,
     metrics: {
       ...metrics,
       successRate,

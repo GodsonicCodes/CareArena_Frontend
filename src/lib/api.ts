@@ -19,26 +19,31 @@ import type {
   RootResponse,
 } from './types';
 
-// API Base URL
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'https://carearena-mai-3svi.onrender.com';
+// API Configuration
+const isDevelopment = import.meta.env.DEV;
+const API_BASE_URL = isDevelopment
+  ? '/api' // Use proxy in development
+  : (import.meta.env.VITE_API_BASE_URL || 'https://carearena-mai-3svi.onrender.com');
+
 const API_KEY = import.meta.env.VITE_API_KEY || '';
 const ADMIN_API_KEY = import.meta.env.VITE_ADMIN_API_KEY || '';
 
-// Create axios instance
+// Create axios instance with CORS handling
 const createApiClient = (apiKey: string): AxiosInstance => {
   const client = axios.create({
     baseURL: API_BASE_URL,
     headers: {
       'Content-Type': 'application/json',
-      'X-API-Key': apiKey,
+      ...(apiKey && { 'X-API-Key': apiKey }),
     },
     timeout: 60000, // 60 seconds for voice calls
+    withCredentials: false, // Don't send credentials for cross-origin requests
   });
 
   // Request interceptor
   client.interceptors.request.use(
     (config) => {
-      console.log(`[API] ${config.method?.toUpperCase()} ${config.url}`);
+      console.log(`[API] ${config.method?.toUpperCase()} ${config.baseURL}${config.url}`);
       return config;
     },
     (error) => Promise.reject(error)
@@ -58,6 +63,8 @@ const createApiClient = (apiKey: string): AxiosInstance => {
         console.error('Rate limit exceeded');
       } else if (error.response?.status && error.response.status >= 500) {
         console.error('Server error');
+      } else if (error.code === 'ERR_NETWORK' || !error.response) {
+        console.error('Network error - possible CORS issue');
       }
       return Promise.reject(error);
     }
@@ -75,28 +82,41 @@ const adminApiClient = createApiClient(ADMIN_API_KEY);
 // ========== ERROR HANDLING ==========
 export const handleAPIError = (error: unknown): string => {
   if (axios.isAxiosError(error)) {
+    // Check for network/CORS errors first
+    if (error.code === 'ERR_NETWORK' || error.message === 'Network Error') {
+      return 'Unable to connect to the server. This may be a CORS issue or the server is unavailable.';
+    }
+
     if (error.response) {
       const status = error.response.status;
-      const detail = (error.response.data as { detail?: string })?.detail;
+      const data = error.response.data as { detail?: string; message?: string };
+      const detail = data?.detail || data?.message;
 
       switch (status) {
         case 400:
           return `Invalid request: ${detail || 'Bad request'}`;
         case 401:
-          return 'Invalid API key. Please check your credentials.';
+          return 'Invalid API key. Please check your credentials in Settings.';
         case 403:
           return 'Access forbidden. Admin key required for this action.';
         case 404:
           return 'Resource not found.';
+        case 422:
+          return `Validation error: ${detail || 'Invalid data provided'}`;
         case 429:
           return 'Rate limit exceeded. Please try again later.';
         case 500:
           return `Server error: ${detail || 'Please try again later.'}`;
+        case 502:
+        case 503:
+        case 504:
+          return 'Server is temporarily unavailable. Please try again in a moment.';
         default:
           return detail || `Error ${status}: Something went wrong.`;
       }
     } else if (error.request) {
-      return 'Network error. Please check your connection.';
+      // Request was made but no response received
+      return 'No response from server. Please check your connection and try again.';
     }
   }
   return `Error: ${error instanceof Error ? error.message : 'Unknown error'}`;
@@ -245,16 +265,23 @@ export const getWebSocketUrl = (): string => {
 export const formatPhoneNumber = (phone: string): string => {
   let formatted = phone.trim().replace(/\s/g, '');
 
-  // If starts with 0, convert to +233
-  if (formatted.startsWith('0')) {
-    formatted = '+233' + formatted.substring(1);
-  }
-  // If doesn't start with +, add +233
-  else if (!formatted.startsWith('+')) {
-    formatted = '+233' + formatted;
+  // Remove any existing + prefix to normalize
+  if (formatted.startsWith('+')) {
+    formatted = formatted.substring(1);
   }
 
-  return formatted;
+  // If starts with 0, convert to 233
+  if (formatted.startsWith('0')) {
+    formatted = '233' + formatted.substring(1);
+  }
+
+  // If doesn't start with 233, add it
+  if (!formatted.startsWith('233')) {
+    formatted = '233' + formatted;
+  }
+
+  // Add + prefix
+  return '+' + formatted;
 };
 
 export { apiClient, adminApiClient };

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import {
   MessageSquare,
   Phone,
@@ -10,6 +10,8 @@ import {
   AlertCircle,
   Play,
   Globe,
+  RefreshCw,
+  Loader2,
 } from 'lucide-react';
 import {
   sendTestSMS,
@@ -19,6 +21,7 @@ import {
   createLocalVoiceCampaign,
   handleAPIError,
   formatPhoneNumber as formatPhone,
+  getHealth,
 } from '@/lib/api';
 import {
   Button,
@@ -140,6 +143,10 @@ function ResultDisplay({ result }: { result: TestResult | null }) {
 export function TestingTools() {
   const { addToast } = useToast();
 
+  // API Connection Status
+  const [apiStatus, setApiStatus] = useState<'checking' | 'connected' | 'error'>('checking');
+  const [isCheckingApi, setIsCheckingApi] = useState(false);
+
   // SMS State
   const [smsPhone, setSmsPhone] = useState('');
   const [smsMessage, setSmsMessage] = useState('');
@@ -176,6 +183,23 @@ export function TestingTools() {
   const [localResult, setLocalResult] = useState<TestResult | null>(null);
   const [localLoading, setLocalLoading] = useState(false);
 
+  // Check API connection on mount
+  const checkApiConnection = async () => {
+    setIsCheckingApi(true);
+    try {
+      const health = await getHealth();
+      setApiStatus(health.status === 'healthy' ? 'connected' : 'error');
+    } catch {
+      setApiStatus('error');
+    } finally {
+      setIsCheckingApi(false);
+    }
+  };
+
+  useEffect(() => {
+    checkApiConnection();
+  }, []);
+
   const handleSendSMS = async () => {
     if (!smsPhone || !smsMessage) {
       addToast({ type: 'error', title: 'Missing fields', description: 'Please fill in all fields' });
@@ -187,7 +211,7 @@ export function TestingTools() {
 
     try {
       const response = await sendTestSMS({
-        recipient: smsPhone,
+        recipient: formatPhone(smsPhone),
         message: smsMessage,
       });
       setSmsResult({
@@ -260,7 +284,7 @@ export function TestingTools() {
 
     try {
       const response = await sendTestWhatsApp({
-        recipient: whatsappPhone,
+        recipient: formatPhone(whatsappPhone),
         message: whatsappMessage,
       });
       setWhatsappResult({
@@ -285,7 +309,7 @@ export function TestingTools() {
   const handleBulkVoice = async () => {
     const phones = bulkRecipients
       .split(/[,\n]/)
-      .map((p) => p.trim())
+      .map((p) => formatPhone(p.trim()))
       .filter((p) => p);
 
     if (phones.length === 0 || !bulkMessage) {
@@ -330,7 +354,7 @@ export function TestingTools() {
   const handleLocalVoice = async () => {
     const phones = localRecipients
       .split(/[,\n]/)
-      .map((p) => p.trim())
+      .map((p) => formatPhone(p.trim()))
       .filter((p) => p);
 
     if (phones.length === 0 || !localMessage || !localCampaignName) {
@@ -385,6 +409,54 @@ export function TestingTools() {
         <p className="mt-1 text-sm text-gray-500">
           Test individual delivery channels before creating full campaigns.
         </p>
+      </div>
+
+      {/* API Connection Status */}
+      <div className={`flex items-center justify-between p-4 rounded-lg border ${
+        apiStatus === 'connected' ? 'bg-green-50 border-green-200' :
+        apiStatus === 'error' ? 'bg-red-50 border-red-200' :
+        'bg-gray-50 border-gray-200'
+      }`}>
+        <div className="flex items-center gap-3">
+          <div className={`w-3 h-3 rounded-full ${
+            apiStatus === 'connected' ? 'bg-green-500 animate-pulse' :
+            apiStatus === 'error' ? 'bg-red-500' :
+            'bg-yellow-500 animate-pulse'
+          }`} />
+          <div>
+            <p className={`font-medium ${
+              apiStatus === 'connected' ? 'text-green-800' :
+              apiStatus === 'error' ? 'text-red-800' :
+              'text-gray-800'
+            }`}>
+              {apiStatus === 'connected' ? 'API Connected' :
+               apiStatus === 'error' ? 'API Connection Failed' :
+               'Checking API Connection...'}
+            </p>
+            <p className={`text-sm ${
+              apiStatus === 'connected' ? 'text-green-600' :
+              apiStatus === 'error' ? 'text-red-600' :
+              'text-gray-600'
+            }`}>
+              {apiStatus === 'connected' ? 'All testing features are available' :
+               apiStatus === 'error' ? 'Unable to connect to backend. Tests may fail.' :
+               'Please wait...'}
+            </p>
+          </div>
+        </div>
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={checkApiConnection}
+          disabled={isCheckingApi}
+        >
+          {isCheckingApi ? (
+            <Loader2 className="h-4 w-4 animate-spin" />
+          ) : (
+            <RefreshCw className="h-4 w-4" />
+          )}
+          <span className="ml-2">Check Connection</span>
+        </Button>
       </div>
 
       {/* Info banner */}
@@ -600,15 +672,16 @@ export function TestingTools() {
         <CardContent>
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
             {[
-              { name: 'mNotify (SMS/Voice)', status: 'active' },
-              { name: 'Twilio (IVR)', status: 'active' },
-              { name: 'ElevenLabs (TTS)', status: 'active' },
-              { name: 'Ghana NLP (Translation)', status: 'active' },
+              { name: 'mNotify (SMS/Voice)', status: apiStatus === 'connected' ? 'active' : 'unknown' },
+              { name: 'Twilio (IVR)', status: apiStatus === 'connected' ? 'active' : 'unknown' },
+              { name: 'ElevenLabs (TTS)', status: apiStatus === 'connected' ? 'active' : 'unknown' },
+              { name: 'Ghana NLP (Translation)', status: apiStatus === 'connected' ? 'active' : 'unknown' },
             ].map((channel) => (
               <div key={channel.name} className="flex items-center gap-3 p-3 bg-gray-50 rounded-lg">
                 <div
                   className={`w-2 h-2 rounded-full ${
-                    channel.status === 'active' ? 'bg-green-500' : 'bg-red-500'
+                    channel.status === 'active' ? 'bg-green-500' :
+                    channel.status === 'unknown' ? 'bg-yellow-500' : 'bg-red-500'
                   }`}
                 />
                 <span className="text-sm font-medium text-gray-700">{channel.name}</span>
