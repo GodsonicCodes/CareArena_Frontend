@@ -32,7 +32,7 @@ const createApiClient = (apiKey: string): AxiosInstance => {
       'Content-Type': 'application/json',
       'X-API-Key': apiKey,
     },
-    timeout: 30000,
+    timeout: 60000, // 60 seconds for voice calls
   });
 
   // Request interceptor
@@ -72,6 +72,36 @@ const apiClient = createApiClient(API_KEY);
 // Admin API client
 const adminApiClient = createApiClient(ADMIN_API_KEY);
 
+// ========== ERROR HANDLING ==========
+export const handleAPIError = (error: unknown): string => {
+  if (axios.isAxiosError(error)) {
+    if (error.response) {
+      const status = error.response.status;
+      const detail = (error.response.data as { detail?: string })?.detail;
+
+      switch (status) {
+        case 400:
+          return `Invalid request: ${detail || 'Bad request'}`;
+        case 401:
+          return 'Invalid API key. Please check your credentials.';
+        case 403:
+          return 'Access forbidden. Admin key required for this action.';
+        case 404:
+          return 'Resource not found.';
+        case 429:
+          return 'Rate limit exceeded. Please try again later.';
+        case 500:
+          return `Server error: ${detail || 'Please try again later.'}`;
+        default:
+          return detail || `Error ${status}: Something went wrong.`;
+      }
+    } else if (error.request) {
+      return 'Network error. Please check your connection.';
+    }
+  }
+  return `Error: ${error instanceof Error ? error.message : 'Unknown error'}`;
+};
+
 // ========== HEALTH & ROOT ==========
 export const getRoot = async (): Promise<RootResponse> => {
   const response = await apiClient.get<RootResponse>('/');
@@ -110,34 +140,50 @@ export const approveCampaign = async (
 };
 
 // ========== TESTING ENDPOINTS ==========
+
+/**
+ * Send SMS via mNotify
+ * @param request - recipient (phone number) and message
+ */
 export const sendTestSMS = async (request: SendSMSRequest): Promise<SendSMSResponse> => {
   const response = await apiClient.post<SendSMSResponse>('/test/send-sms', request);
   return response.data;
 };
 
+/**
+ * Make IVR Call with AI agent (Twilio + ElevenLabs)
+ * @param request - phone_number, disease_name, patient_name, language, campaign_goals
+ */
 export const makeTestIVRCall = async (request: MakeIVRCallRequest): Promise<MakeIVRCallResponse> => {
   const response = await apiClient.post<MakeIVRCallResponse>('/test/make-ivr-call', request);
   return response.data;
 };
 
+/**
+ * Send bulk voice calls in English (mNotify + ElevenLabs TTS)
+ * @param request - recipients (array of phone numbers), message, campaign_name
+ */
 export const sendBulkVoice = async (request: BulkVoiceRequest): Promise<BulkVoiceResponse> => {
   const response = await apiClient.post<BulkVoiceResponse>('/test/bulk-voice', request);
   return response.data;
 };
 
+/**
+ * Send WhatsApp message
+ * @param request - recipient and message
+ */
 export const sendTestWhatsApp = async (request: WhatsAppTestRequest): Promise<WhatsAppTestResponse> => {
   const response = await apiClient.post<WhatsAppTestResponse>('/test/whatsapp', request);
   return response.data;
 };
 
-// ========== BULK CAMPAIGN ENDPOINTS ==========
-export const createBulkVoiceCampaign = async (
-  request: BulkVoiceRequest & { disease_name: string; language: string; campaign_goals?: string }
-): Promise<BulkVoiceResponse & { job_id?: string; audio_urls?: string[] }> => {
-  const response = await apiClient.post('/campaigns/bulk-voice', request);
-  return response.data;
-};
+// ========== CAMPAIGN ENDPOINTS ==========
 
+/**
+ * Create local language voice campaign (mNotify + Ghana NLP)
+ * Translates English message to local language and sends voice calls
+ * @param request - recipients, message, campaign_name, target_language, etc.
+ */
 export const createLocalVoiceCampaign = async (
   request: LocalVoiceRequest
 ): Promise<LocalVoiceResponse> => {
@@ -193,6 +239,22 @@ export const getApiBaseUrl = (): string => {
 // Get WebSocket URL
 export const getWebSocketUrl = (): string => {
   return import.meta.env.VITE_WS_BASE_URL || 'wss://carearena-mai-3svi.onrender.com';
+};
+
+// Format phone number to Ghana format
+export const formatPhoneNumber = (phone: string): string => {
+  let formatted = phone.trim().replace(/\s/g, '');
+
+  // If starts with 0, convert to +233
+  if (formatted.startsWith('0')) {
+    formatted = '+233' + formatted.substring(1);
+  }
+  // If doesn't start with +, add +233
+  else if (!formatted.startsWith('+')) {
+    formatted = '+233' + formatted;
+  }
+
+  return formatted;
 };
 
 export { apiClient, adminApiClient };

@@ -8,15 +8,18 @@ import {
   CheckCircle,
   XCircle,
   AlertCircle,
+  Play,
+  Globe,
 } from 'lucide-react';
 import {
-  useSendTestSMS,
-  useMakeTestIVRCall,
-  useSendTestWhatsApp,
-  useSendBulkVoice,
-} from '@/lib/queries';
-import { Language } from '@/lib/types';
-import { isValidGhanaPhone, toInternationalPhone } from '@/lib/utils';
+  sendTestSMS,
+  makeTestIVRCall,
+  sendTestWhatsApp,
+  sendBulkVoice,
+  createLocalVoiceCampaign,
+  handleAPIError,
+  formatPhoneNumber as formatPhone,
+} from '@/lib/api';
 import {
   Button,
   Card,
@@ -36,10 +39,19 @@ const languageOptions = [
   { value: 'ga', label: 'Ga' },
 ];
 
+const localLanguageOptions = [
+  { value: 'tw', label: 'Twi (Akan)' },
+  { value: 'ee', label: 'Ewe' },
+  { value: 'aka', label: 'Ga' },
+  { value: 'dag', label: 'Dagbani' },
+  { value: 'fat', label: 'Fante' },
+];
+
 const diseaseOptions = [
   { value: 'Malaria', label: 'Malaria Prevention' },
   { value: 'Diabetes', label: 'Diabetes Management' },
   { value: 'Hypertension', label: 'Hypertension Control' },
+  { value: 'Pre-eclampsia', label: 'Pre-eclampsia' },
   { value: 'COVID-19', label: 'COVID-19 Prevention' },
   { value: 'HIV/AIDS', label: 'HIV/AIDS Awareness' },
   { value: 'Maternal Health', label: 'Maternal Health' },
@@ -49,7 +61,8 @@ const diseaseOptions = [
 interface TestResult {
   success: boolean;
   message: string;
-  details?: string;
+  details?: Record<string, unknown>;
+  audioUrl?: string;
 }
 
 function TestCard({
@@ -88,24 +101,37 @@ function ResultDisplay({ result }: { result: TestResult | null }) {
 
   return (
     <div
-      className={`mt-4 p-4 rounded-lg flex items-start gap-3 ${
+      className={`mt-4 p-4 rounded-lg ${
         result.success ? 'bg-green-50 border border-green-200' : 'bg-red-50 border border-red-200'
       }`}
     >
-      {result.success ? (
-        <CheckCircle className="h-5 w-5 text-green-500 flex-shrink-0" />
-      ) : (
-        <XCircle className="h-5 w-5 text-red-500 flex-shrink-0" />
-      )}
-      <div>
-        <p className={`font-medium ${result.success ? 'text-green-800' : 'text-red-800'}`}>
-          {result.message}
-        </p>
-        {result.details && (
-          <p className={`text-sm mt-1 ${result.success ? 'text-green-600' : 'text-red-600'}`}>
-            {result.details}
-          </p>
+      <div className="flex items-start gap-3">
+        {result.success ? (
+          <CheckCircle className="h-5 w-5 text-green-500 flex-shrink-0" />
+        ) : (
+          <XCircle className="h-5 w-5 text-red-500 flex-shrink-0" />
         )}
+        <div className="flex-1">
+          <p className={`font-medium ${result.success ? 'text-green-800' : 'text-red-800'}`}>
+            {result.message}
+          </p>
+          {result.details && (
+            <div className="mt-2 space-y-1">
+              {Object.entries(result.details).map(([key, value]) => (
+                <p key={key} className={`text-sm ${result.success ? 'text-green-700' : 'text-red-700'}`}>
+                  <strong>{key}:</strong>{' '}
+                  {typeof value === 'string' ? value : JSON.stringify(value)}
+                </p>
+              ))}
+            </div>
+          )}
+          {result.audioUrl && (
+            <div className="mt-3">
+              <p className="text-sm font-medium mb-1">Preview audio:</p>
+              <audio controls src={result.audioUrl} className="w-full" />
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );
@@ -118,7 +144,7 @@ export function TestingTools() {
   const [smsPhone, setSmsPhone] = useState('');
   const [smsMessage, setSmsMessage] = useState('');
   const [smsResult, setSmsResult] = useState<TestResult | null>(null);
-  const sendSMS = useSendTestSMS();
+  const [smsLoading, setSmsLoading] = useState(false);
 
   // Voice/IVR State
   const [voicePhone, setVoicePhone] = useState('');
@@ -127,157 +153,227 @@ export function TestingTools() {
   const [voicePatientName, setVoicePatientName] = useState('');
   const [voiceGoals, setVoiceGoals] = useState('');
   const [voiceResult, setVoiceResult] = useState<TestResult | null>(null);
-  const makeIVRCall = useMakeTestIVRCall();
+  const [voiceLoading, setVoiceLoading] = useState(false);
 
   // WhatsApp State
   const [whatsappPhone, setWhatsappPhone] = useState('');
   const [whatsappMessage, setWhatsappMessage] = useState('');
   const [whatsappResult, setWhatsappResult] = useState<TestResult | null>(null);
-  const sendWhatsApp = useSendTestWhatsApp();
+  const [whatsappLoading, setWhatsappLoading] = useState(false);
 
-  // Bulk Voice State
+  // Bulk Voice State (English)
   const [bulkRecipients, setBulkRecipients] = useState('');
-  const [bulkAudioUrl, setBulkAudioUrl] = useState('');
-  const [bulkDelay, setBulkDelay] = useState(5);
+  const [bulkMessage, setBulkMessage] = useState('');
+  const [bulkCampaignName, setBulkCampaignName] = useState('Test Voice Campaign');
   const [bulkResult, setBulkResult] = useState<TestResult | null>(null);
-  const sendBulkVoice = useSendBulkVoice();
+  const [bulkLoading, setBulkLoading] = useState(false);
 
-  const validatePhone = (phone: string): boolean => {
-    if (!isValidGhanaPhone(phone)) {
-      addToast({
-        type: 'error',
-        title: 'Invalid phone number',
-        description: 'Please enter a valid Ghana phone number (+233 or 0XX format)',
-      });
-      return false;
-    }
-    return true;
-  };
+  // Local Voice State (Ghana NLP)
+  const [localRecipients, setLocalRecipients] = useState('');
+  const [localMessage, setLocalMessage] = useState('');
+  const [localCampaignName, setLocalCampaignName] = useState('');
+  const [localLanguage, setLocalLanguage] = useState('tw');
+  const [localResult, setLocalResult] = useState<TestResult | null>(null);
+  const [localLoading, setLocalLoading] = useState(false);
 
   const handleSendSMS = async () => {
-    if (!validatePhone(smsPhone)) return;
-    if (!smsMessage.trim()) {
-      addToast({ type: 'error', title: 'Message required', description: 'Please enter a message' });
+    if (!smsPhone || !smsMessage) {
+      addToast({ type: 'error', title: 'Missing fields', description: 'Please fill in all fields' });
       return;
     }
 
+    setSmsLoading(true);
+    setSmsResult(null);
+
     try {
-      const result = await sendSMS.mutateAsync({
-        recipient: toInternationalPhone(smsPhone),
+      const response = await sendTestSMS({
+        recipient: smsPhone,
         message: smsMessage,
       });
       setSmsResult({
-        success: result.success,
-        message: result.success ? 'SMS sent successfully!' : 'Failed to send SMS',
-        details: result.message_id ? `Message ID: ${result.message_id}` : result.error,
+        success: response.success,
+        message: response.success ? 'SMS sent successfully!' : (response.message || 'Failed to send SMS'),
+        details: response.result ? { response: response.result } : undefined,
       });
+      if (response.success) {
+        setSmsPhone('');
+        setSmsMessage('');
+      }
     } catch (error) {
       setSmsResult({
         success: false,
-        message: 'Failed to send SMS',
-        details: 'An error occurred. Please try again.',
+        message: handleAPIError(error),
       });
+    } finally {
+      setSmsLoading(false);
     }
   };
 
   const handleMakeCall = async () => {
-    if (!validatePhone(voicePhone)) return;
+    if (!voicePhone || !voiceDisease) {
+      addToast({ type: 'error', title: 'Missing fields', description: 'Please fill in required fields' });
+      return;
+    }
+
+    setVoiceLoading(true);
+    setVoiceResult(null);
 
     try {
-      const result = await makeIVRCall.mutateAsync({
-        phone_number: toInternationalPhone(voicePhone),
+      const formattedPhone = formatPhone(voicePhone);
+      const response = await makeTestIVRCall({
+        phone_number: formattedPhone,
         disease_name: voiceDisease,
         patient_name: voicePatientName || undefined,
-        language: voiceLanguage as Language,
+        language: voiceLanguage,
         campaign_goals: voiceGoals || undefined,
       });
       setVoiceResult({
-        success: result.success,
-        message: result.success ? 'Call initiated successfully!' : 'Failed to initiate call',
-        details: result.call_sid ? `Call SID: ${result.call_sid}` : result.error,
+        success: response.success,
+        message: response.success ? 'Call initiated successfully!' : (response.message || 'Failed to initiate call'),
+        details: {
+          'Call SID': response.call_sid || 'N/A',
+          'Status': response.status || 'N/A',
+          'Phone': response.phone_number || formattedPhone,
+          'Topic': response.disease_name || voiceDisease,
+          'Language': response.language || voiceLanguage,
+          ...(response.patient_name && { 'Patient': response.patient_name }),
+        },
       });
     } catch (error) {
       setVoiceResult({
         success: false,
-        message: 'Failed to initiate call',
-        details: 'An error occurred. Please try again.',
+        message: handleAPIError(error),
       });
+    } finally {
+      setVoiceLoading(false);
     }
   };
 
   const handleSendWhatsApp = async () => {
-    if (!validatePhone(whatsappPhone)) return;
-    if (!whatsappMessage.trim()) {
-      addToast({ type: 'error', title: 'Message required', description: 'Please enter a message' });
+    if (!whatsappPhone || !whatsappMessage) {
+      addToast({ type: 'error', title: 'Missing fields', description: 'Please fill in all fields' });
       return;
     }
 
+    setWhatsappLoading(true);
+    setWhatsappResult(null);
+
     try {
-      const result = await sendWhatsApp.mutateAsync({
-        recipient: toInternationalPhone(whatsappPhone),
+      const response = await sendTestWhatsApp({
+        recipient: whatsappPhone,
         message: whatsappMessage,
       });
       setWhatsappResult({
-        success: result.success,
-        message: result.success ? 'WhatsApp message sent!' : 'Failed to send WhatsApp message',
-        details: result.message_id ? `Message ID: ${result.message_id}` : result.error,
+        success: response.success,
+        message: response.success ? 'WhatsApp message sent!' : (response.message || 'Failed to send WhatsApp message'),
+        details: response.message_id ? { 'Message ID': response.message_id } : undefined,
       });
+      if (response.success) {
+        setWhatsappPhone('');
+        setWhatsappMessage('');
+      }
     } catch (error) {
       setWhatsappResult({
         success: false,
-        message: 'Failed to send WhatsApp message',
-        details: 'An error occurred. Please try again.',
+        message: handleAPIError(error),
       });
+    } finally {
+      setWhatsappLoading(false);
     }
   };
 
   const handleBulkVoice = async () => {
     const phones = bulkRecipients
-      .split('\n')
+      .split(/[,\n]/)
       .map((p) => p.trim())
       .filter((p) => p);
 
-    if (phones.length === 0) {
+    if (phones.length === 0 || !bulkMessage) {
       addToast({
         type: 'error',
-        title: 'Recipients required',
-        description: 'Please enter at least one phone number',
+        title: 'Missing fields',
+        description: 'Please enter recipients and a message',
       });
       return;
     }
 
-    if (!bulkAudioUrl.trim()) {
-      addToast({
-        type: 'error',
-        title: 'Audio URL required',
-        description: 'Please enter the audio file URL',
-      });
-      return;
-    }
-
-    const recipients = phones.map((phone) => ({
-      phone_number: toInternationalPhone(phone),
-    }));
+    setBulkLoading(true);
+    setBulkResult(null);
 
     try {
-      const result = await sendBulkVoice.mutateAsync({
-        recipients,
-        audio_url: bulkAudioUrl,
-        delay_between_calls_seconds: bulkDelay,
+      const response = await sendBulkVoice({
+        recipients: phones,
+        message: bulkMessage,
+        campaign_name: bulkCampaignName,
       });
       setBulkResult({
-        success: result.success,
-        message: result.success
-          ? `Bulk calls initiated: ${result.initiated_calls}/${result.total_recipients}`
-          : 'Failed to initiate bulk calls',
-        details: result.error,
+        success: response.success,
+        message: response.success
+          ? `Bulk voice calls initiated: ${response.recipients_count} recipients`
+          : (response.message || 'Failed to initiate bulk calls'),
+        details: {
+          'Voice ID': response.voice_id || 'N/A',
+          'Recipients': response.recipients_count,
+        },
+        audioUrl: response.audio_url,
       });
     } catch (error) {
       setBulkResult({
         success: false,
-        message: 'Failed to initiate bulk calls',
-        details: 'An error occurred. Please try again.',
+        message: handleAPIError(error),
       });
+    } finally {
+      setBulkLoading(false);
+    }
+  };
+
+  const handleLocalVoice = async () => {
+    const phones = localRecipients
+      .split(/[,\n]/)
+      .map((p) => p.trim())
+      .filter((p) => p);
+
+    if (phones.length === 0 || !localMessage || !localCampaignName) {
+      addToast({
+        type: 'error',
+        title: 'Missing fields',
+        description: 'Please fill in all required fields',
+      });
+      return;
+    }
+
+    setLocalLoading(true);
+    setLocalResult(null);
+
+    try {
+      const response = await createLocalVoiceCampaign({
+        recipients: phones,
+        message: localMessage,
+        campaign_name: localCampaignName,
+        target_language: localLanguage,
+        is_schedule: false,
+      });
+      setLocalResult({
+        success: response.success,
+        message: response.success
+          ? `Local language campaign created: ${response.recipients_count} recipients`
+          : (response.message || 'Failed to create campaign'),
+        details: {
+          'Campaign ID': response.campaign_id || 'N/A',
+          'Voice ID': response.voice_id || 'N/A',
+          'Language': response.target_language || localLanguage,
+          'Recipients': response.recipients_count,
+          ...(response.translated_message && { 'Translated': response.translated_message }),
+        },
+        audioUrl: response.audio_url,
+      });
+    } catch (error) {
+      setLocalResult({
+        success: false,
+        message: handleAPIError(error),
+      });
+    } finally {
+      setLocalLoading(false);
     }
   };
 
@@ -298,7 +394,7 @@ export function TestingTools() {
           <p className="font-medium text-amber-800">Testing Mode</p>
           <p className="text-sm text-amber-700 mt-1">
             These tools send real messages to real phone numbers. Use for testing purposes only with
-            numbers you have permission to contact.
+            numbers you have permission to contact. Voice calls will incur Twilio charges.
           </p>
         </div>
       </div>
@@ -315,21 +411,20 @@ export function TestingTools() {
           <div className="space-y-4">
             <Input
               label="Recipient Phone"
-              placeholder="+233 20 123 4567"
+              placeholder="0241234567 or 233241234567"
               value={smsPhone}
               onChange={(e) => setSmsPhone(e.target.value)}
               hint="Ghana phone number format"
             />
             <Textarea
-              label="Message"
-              placeholder="Enter your test message..."
+              label={`Message (${smsMessage.length}/160)`}
+              placeholder="Enter your health message..."
               value={smsMessage}
               onChange={(e) => setSmsMessage(e.target.value)}
               rows={3}
               maxLength={160}
-              showCount
             />
-            <Button onClick={handleSendSMS} isLoading={sendSMS.isPending} className="w-full">
+            <Button onClick={handleSendSMS} isLoading={smsLoading} className="w-full">
               <Send className="h-4 w-4 mr-2" />
               Send SMS
             </Button>
@@ -339,21 +434,22 @@ export function TestingTools() {
 
         {/* Voice/IVR Test */}
         <TestCard
-          title="Test Voice/IVR"
-          description="Make a test outbound voice call"
+          title="Interactive IVR Call"
+          description="Make AI-powered voice call with real-time conversation"
           icon={Phone}
           iconColor="bg-green-100 text-green-600"
         >
           <div className="space-y-4">
             <Input
-              label="Phone Number"
-              placeholder="+233 20 123 4567"
+              label="Phone Number *"
+              placeholder="+233241234567 or 0241234567"
               value={voicePhone}
               onChange={(e) => setVoicePhone(e.target.value)}
+              hint="E.164 format: +233XXXXXXXXX"
             />
             <div className="grid grid-cols-2 gap-4">
               <Select
-                label="Disease Topic"
+                label="Health Topic *"
                 options={diseaseOptions}
                 value={voiceDisease}
                 onChange={(e) => setVoiceDisease(e.target.value)}
@@ -367,19 +463,20 @@ export function TestingTools() {
             </div>
             <Input
               label="Patient Name (optional)"
-              placeholder="John Doe"
+              placeholder="e.g., Akua Mensah"
               value={voicePatientName}
               onChange={(e) => setVoicePatientName(e.target.value)}
+              hint="AI will personalize the conversation"
             />
             <Input
               label="Campaign Goals (optional)"
-              placeholder="Increase medication adherence..."
+              placeholder="e.g., Educate about warning signs..."
               value={voiceGoals}
               onChange={(e) => setVoiceGoals(e.target.value)}
             />
-            <Button onClick={handleMakeCall} isLoading={makeIVRCall.isPending} className="w-full">
+            <Button onClick={handleMakeCall} isLoading={voiceLoading} className="w-full">
               <Phone className="h-4 w-4 mr-2" />
-              Make Call
+              Make IVR Call
             </Button>
             <ResultDisplay result={voiceResult} />
           </div>
@@ -395,7 +492,7 @@ export function TestingTools() {
           <div className="space-y-4">
             <Input
               label="Recipient Phone"
-              placeholder="+233 20 123 4567"
+              placeholder="+233241234567"
               value={whatsappPhone}
               onChange={(e) => setWhatsappPhone(e.target.value)}
               hint="WhatsApp registered number"
@@ -407,11 +504,7 @@ export function TestingTools() {
               onChange={(e) => setWhatsappMessage(e.target.value)}
               rows={3}
             />
-            <Button
-              onClick={handleSendWhatsApp}
-              isLoading={sendWhatsApp.isPending}
-              className="w-full"
-            >
+            <Button onClick={handleSendWhatsApp} isLoading={whatsappLoading} className="w-full">
               <Send className="h-4 w-4 mr-2" />
               Send WhatsApp
             </Button>
@@ -419,44 +512,82 @@ export function TestingTools() {
           </div>
         </TestCard>
 
-        {/* Bulk Voice Test */}
+        {/* Bulk Voice Test (English) */}
         <TestCard
-          title="Bulk Voice Test"
-          description="Test bulk voice calls with pre-recorded audio"
+          title="Bulk Voice (English)"
+          description="Send voice messages to multiple recipients using AI TTS"
           icon={Users}
           iconColor="bg-purple-100 text-purple-600"
         >
           <div className="space-y-4">
+            <Input
+              label="Campaign Name"
+              placeholder="e.g., Malaria Prevention Test"
+              value={bulkCampaignName}
+              onChange={(e) => setBulkCampaignName(e.target.value)}
+            />
             <Textarea
               label="Recipients (one per line)"
-              placeholder="+233201234567&#10;+233209876543&#10;..."
+              placeholder="233241234567&#10;233201234567&#10;0555551234"
               value={bulkRecipients}
               onChange={(e) => setBulkRecipients(e.target.value)}
               rows={3}
             />
-            <Input
-              label="Audio URL"
-              placeholder="https://example.com/audio.mp3"
-              value={bulkAudioUrl}
-              onChange={(e) => setBulkAudioUrl(e.target.value)}
+            <Textarea
+              label="Voice Message (keep under 150 words)"
+              placeholder="Hello! This is a health reminder about malaria prevention..."
+              value={bulkMessage}
+              onChange={(e) => setBulkMessage(e.target.value)}
+              rows={4}
             />
-            <Input
-              label="Delay Between Calls (seconds)"
-              type="number"
-              min={1}
-              max={60}
-              value={bulkDelay}
-              onChange={(e) => setBulkDelay(parseInt(e.target.value) || 5)}
-            />
-            <Button
-              onClick={handleBulkVoice}
-              isLoading={sendBulkVoice.isPending}
-              className="w-full"
-            >
-              <Users className="h-4 w-4 mr-2" />
-              Start Bulk Calls
+            <Button onClick={handleBulkVoice} isLoading={bulkLoading} className="w-full">
+              <Play className="h-4 w-4 mr-2" />
+              Send Bulk Voice
             </Button>
             <ResultDisplay result={bulkResult} />
+          </div>
+        </TestCard>
+
+        {/* Local Language Voice */}
+        <TestCard
+          title="Local Language Voice"
+          description="Send voice messages in Ghanaian local languages (Twi, Ewe, Ga)"
+          icon={Globe}
+          iconColor="bg-orange-100 text-orange-600"
+        >
+          <div className="space-y-4">
+            <Input
+              label="Campaign Name *"
+              placeholder="e.g., Malaria Prevention - Twi"
+              value={localCampaignName}
+              onChange={(e) => setLocalCampaignName(e.target.value)}
+            />
+            <Select
+              label="Target Language *"
+              options={localLanguageOptions}
+              value={localLanguage}
+              onChange={(e) => setLocalLanguage(e.target.value)}
+            />
+            <Textarea
+              label="Recipients (one per line)"
+              placeholder="233241234567&#10;233201234567"
+              value={localRecipients}
+              onChange={(e) => setLocalRecipients(e.target.value)}
+              rows={3}
+            />
+            <Textarea
+              label="Message in English *"
+              placeholder="Hello, remember to take your malaria medication today..."
+              value={localMessage}
+              onChange={(e) => setLocalMessage(e.target.value)}
+              rows={4}
+              hint="Message will be translated to the selected local language"
+            />
+            <Button onClick={handleLocalVoice} isLoading={localLoading} className="w-full">
+              <Globe className="h-4 w-4 mr-2" />
+              Send Local Voice
+            </Button>
+            <ResultDisplay result={localResult} />
           </div>
         </TestCard>
       </div>
@@ -469,10 +600,10 @@ export function TestingTools() {
         <CardContent>
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
             {[
-              { name: 'mNotify (SMS)', status: 'active' },
-              { name: 'Twilio (Voice)', status: 'active' },
-              { name: 'WhatsApp', status: 'active' },
+              { name: 'mNotify (SMS/Voice)', status: 'active' },
+              { name: 'Twilio (IVR)', status: 'active' },
               { name: 'ElevenLabs (TTS)', status: 'active' },
+              { name: 'Ghana NLP (Translation)', status: 'active' },
             ].map((channel) => (
               <div key={channel.name} className="flex items-center gap-3 p-3 bg-gray-50 rounded-lg">
                 <div

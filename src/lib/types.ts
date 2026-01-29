@@ -173,64 +173,82 @@ export interface RootResponse {
 
 // ========== TEST ENDPOINTS ==========
 export interface SendSMSRequest {
-  recipient: string; // Phone number
+  recipient: string; // Phone number: "0241234567" or "233241234567"
   message: string;
 }
 
 export interface SendSMSResponse {
   success: boolean;
-  message_id?: string;
-  provider_response?: unknown;
-  error?: string;
+  result?: unknown;
+  message: string;
 }
 
 export interface MakeIVRCallRequest {
-  phone_number: string;
+  phone_number: string; // E.164 format: +233XXXXXXXXX
   disease_name: string;
   patient_name?: string;
-  language?: Language;
+  language?: string; // "en", "tw", "ga"
   campaign_goals?: string;
 }
 
 export interface MakeIVRCallResponse {
   success: boolean;
-  call_sid?: string;
-  websocket_url?: string;
+  call_sid: string;
+  status: string;
+  message: string;
+  phone_number: string;
+  disease_name: string;
+  patient_name?: string;
+  language: string;
+  websocket_url: string;
+  raw_response?: unknown;
   error?: string;
 }
 
+// Bulk Voice for English (mNotify + ElevenLabs)
 export interface BulkVoiceRequest {
-  recipients: Array<{
-    phone_number: string;
-    patient_name?: string;
-  }>;
-  audio_url: string;
-  delay_between_calls_seconds?: number;
+  recipients: string[];
+  message: string;
+  campaign_name: string;
 }
 
 export interface BulkVoiceResponse {
   success: boolean;
-  total_recipients: number;
-  initiated_calls: number;
+  test_id?: string;
+  voice_id?: string;
+  recipients_count: number;
+  audio_url?: string;
+  message: string;
   error?: string;
 }
 
+// Local Voice Campaign (mNotify + Ghana NLP)
 export interface LocalVoiceRequest {
-  recipients: Array<{
-    phone_number: string;
-    patient_name?: string;
-  }>;
-  disease_name: string;
-  language: Language; // tw, ga only
-  campaign_goals?: string;
-  dry_run?: boolean;
+  recipients: string[];
+  message: string; // English message to be translated
+  campaign_name: string;
+  target_language: string; // "tw", "ee", "aka", "dag", "fat"
+  speaker_id?: string;
+  is_schedule: boolean;
+  schedule_date?: string; // "YYYY-MM-DD HH:mm"
 }
 
 export interface LocalVoiceResponse {
   success: boolean;
-  job_id?: string;
-  total_recipients: number;
-  audio_urls?: string[];
+  campaign_id?: string;
+  voice_id?: string;
+  campaign_name?: string;
+  recipients_count: number;
+  audio_url?: string;
+  audio_path?: string;
+  original_message?: string;
+  translated_message?: string;
+  target_language?: string;
+  speaker_id?: string;
+  is_scheduled?: boolean;
+  schedule_date?: string;
+  mnotify_response?: unknown;
+  message: string;
   error?: string;
 }
 
@@ -243,6 +261,7 @@ export interface WhatsAppTestResponse {
   success: boolean;
   message_id?: string;
   provider_response?: unknown;
+  message?: string;
   error?: string;
 }
 
