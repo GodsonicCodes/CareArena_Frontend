@@ -20,10 +20,8 @@ import type {
 } from './types';
 
 // API Configuration
-const isDevelopment = import.meta.env.DEV;
-const API_BASE_URL = isDevelopment
-  ? '/api' // Use proxy in development
-  : (import.meta.env.VITE_API_BASE_URL || 'https://carearena-mai-3svi.onrender.com');
+// Always use /api prefix - Render will proxy to backend, avoiding CORS
+const API_BASE_URL = '/api';
 
 const API_KEY = import.meta.env.VITE_API_KEY || '';
 const ADMIN_API_KEY = import.meta.env.VITE_ADMIN_API_KEY || '';

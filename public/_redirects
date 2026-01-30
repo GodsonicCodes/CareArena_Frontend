@@ -1,1 +1,5 @@
+# Proxy API requests to backend to avoid CORS issues
+/api/* https://carearena-mai-3svi.onrender.com/:splat 200
+
+# SPA fallback - must be last
 /* /index.html 200
